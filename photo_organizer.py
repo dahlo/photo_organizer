@@ -8,6 +8,7 @@ from IPython.core.debugger import Tracer
 import PIL.Image
 import hashlib
 import shutil
+from optparse import OptionParser
 
 from hachoir_core.error import HachoirError
 from hachoir_core.cmd_line import unicodeFilename
@@ -19,33 +20,49 @@ from sys import argv, stderr, exit
 
 
 
+parser = OptionParser(usage='usage: %prog [arguments]')
+parser.add_option('-i', '--input', 
+                        dest='indir',
+                        help='Input directory which will be traversed for files.')
+parser.add_option('-o', '--output', 
+                        dest='outdir',
+                        help='Output directory where the result will be placed.')
+parser.add_option('-v', '--verbose', action="store_true", help="Verbose progress reporting.", default=False)
+parser.add_option('-q', '--quiet', action="store_true", help="Suppress all output.", default=False)
+(options, args) = parser.parse_args()
+if not options.indir:   # if filename is not given
+    parser.error('Input directory (-i) not given')
+if not options.outdir:   # if filename is not given
+    parser.error('Output directory (-o) not given')
 
-usage = "python {0} <input directory> <output directory>".format(sys.argv[0])
 
-try:
-    indir = sys.argv[1]
-    outdir = sys.argv[2]
-except IndexError:
-    sys.exit(usage)
 
+
+
+
+indir = options.indir
+outdir = options.outdir
 
 # list all file endings
-image_endings = ['jpg', 'jpeg', 'tif', 'tiff', 'gif', '', '', '', '']
-video_endings = ['mp4', 'mpeg', 'mpg', 'vid', 'avi', '']
+image_endings = ['jpg', 'jpeg', 'tif', 'tiff', 'gif']
+video_endings = ['mp4', 'mpeg', 'mpg', 'vid', 'avi']
+
+# blacklisted annoations
+annotation_blacklist = ['camera', '100andro', 'opencamera', 'dcim' ]
 
 
 
 
 
 # handle image files
-def process_image(root, file, annotation):
+def process_file(root, file, annotation):
 
     # get the checksum of the file
     checksum = md5(root, file)
 
     # if it has been seen before
     if checksum in checksum_memory:
-        return
+        return 0
 
     # get the photos date
     date = get_file_date(root, file)
@@ -74,45 +91,6 @@ def process_image(root, file, annotation):
 
     return 1
 
-
-
-
-# handle video files
-def process_video(root, file, annotation):
-
-    # get the checksum of the file
-    checksum = md5(root, file)
-
-    # if it has been seen before
-    if checksum in checksum_memory:
-        return
-
-    # get the photos date
-    date = get_file_date(root, file)
-
-    # Tracer()()
-
-    # add the annotation to the dirname if needed
-    dirname = time.strftime("%Y-%m-%d", date)
-    if annotation != "":
-        dirname += " "+annotation
-
-    # create the dir if needed
-    if not os.path.exists("{}/{}".format(outdir, dirname)):
-        os.makedirs("{}/{}".format(outdir, dirname))
-
-
-
-    # add increment if filename already exists
-    outfilename = checkfile("{}/{}/{}.{}".format(outdir,dirname,time.strftime("%Y-%m-%d_%H%M%S", date),file.split('.')[-1].lower()))
-
-    # copy the file to the output dir with the correct name
-    shutil.copy("{}/{}".format(root,file), outfilename)
-
-    # add it to the memory
-    checksum_memory[checksum] = 1
-
-    return 1
 
 
 
@@ -254,30 +232,40 @@ if not os.path.exists(outdir):
 # go through the files
 for root, subFolders, files in os.walk(indir):
 
-    # get a possible annotation string
+    # get a possible annotation string from folder names with dates
     annotation = ""
-    match = re.search('[0-9-_]+\s*(.*)$', root.split('/')[-1])
+    match = re.search('[0-9-_]+\s+(.+)$', root.split('/')[-1])
     if match:
         annotation = match.groups()[0]
+
+    # get annotation from folder names not starting with a date
+    match = re.search('^(\D.*)$', root.split('/')[-1])
+    if match and annotation == "":
+        annotation = match.groups()[0]
+
+    # remove blacklisted annoations
+    if annotation.lower() in annotation_blacklist:
+        annotation = ""
 
     # for each file in the subdir
     for file in files:
 
         # if it's a image
-        if file.split('.')[-1].lower() in image_endings:
-            if not process_image(root, file, annotation):
-                print "[ERR] File failed: {}/{}".format(root,file)
-            print "Processed: {}/{}".format(root,file)
+        if file.split('.')[-1].lower() in image_endings or file.split('.')[-1].lower() in video_endings:
+            exitcode = process_file(root, file, annotation)
+            if exitcode == 0 and (not options.quiet or options.verbose):
+                print "Duplicate file skipped: {}/{}".format(root,file)
 
-        # if it's a video
-        elif file.split('.')[-1].lower() in video_endings:
-            if not process_video(root, file, annotation):
+            elif exitcode != 1 and (not options.quiet or options.verbose):
                 print "[ERR] File failed: {}/{}".format(root,file)
-            print "Processed: {}/{}".format(root,file)
+
+            if options.verbose:
+                print "Processed: {}/{}".format(root,file)
 
         # save the ending
         else:
-            print "File skipped: {}/{}".format(root,file)
+            if not options.quiet or options.verbose:
+                print "File skipped: {}/{}".format(root,file)
             endings_memory[file.split('.')[-1].lower()] = 1
 
 
